@@ -1,0 +1,71 @@
+name: Gravar video CNC
+on:
+  workflow_dispatch:
+    inputs:
+      corte:
+        description: Qual video gerar?
+        type: choice
+        required: true
+        default: 60s
+        options:
+          - teste
+          - 60s
+          - completo
+          - ambos
+permissions:
+  contents: read
+concurrency:
+  group: video-cnc-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  gravar:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CORTE: ${{ inputs.corte }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Abrir pacote
+        run: unzip -q pacote_video.zip -d video
+      - name: Instalar ferramentas na maquina temporaria
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+          cd video
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Validar e preparar cenas
+        working-directory: video
+        run: |
+          npm run check
+          npm run scenes
+      - name: Gravar navegacao no Chromium
+        working-directory: video
+        run: node scripts/record.js "$CORTE"
+      - name: Montar os cortes e aplicar legendas
+        working-directory: video
+        run: python3 scripts/compose.py "$CORTE"
+      - name: Conferir formato e extrair quadros
+        working-directory: video
+        run: python3 scripts/verify.py
+      - name: Disponibilizar videos para download
+        uses: actions/upload-artifact@v4
+        with:
+          name: cnc-videos-${{ inputs.corte }}-${{ github.run_number }}
+          path: video/output/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Guardar diagnostico se houver falha
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostico-video-${{ github.run_number }}
+          path: |
+            video/build/*.json
+            video/build/*.png
+            video/build/*.webm
+          if-no-files-found: ignore
+          retention-days: 3
